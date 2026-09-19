@@ -66,7 +66,7 @@ class SourceItem(BaseModel):
 
 class AskResponse(BaseModel):
     status: Literal["ok", "unsupported", "missing_location", "error"]
-    questionType: Optional[Literal["sea_conditions", "protected_area", "unsupported"]] = None
+    questionType: Optional[Literal["sea_conditions", "protected_area", "comparison", "unsupported"]] = None
     location: Optional[LocationData] = None
     verdict: Optional[Literal["SAFE", "CAUTION", "UNSAFE"]] = None
     riskScore: Optional[int] = None
@@ -128,8 +128,8 @@ def ask(request: AskRequest) -> AskResponse:
     """
     Main ORCA endpoint implementing the full pipeline:
     1. DEMO_MODE: Offline rehearsed answers (skips LLM calls)
-    2. Planner LLM Call: Extract location & classify questionType
-    3. Data & Rules Engine: Deterministic verdict & numbers
+    2. Planner LLM Call: Extract location(s), target date, & classify questionType
+    3. Data & Rules Engine: Deterministic verdict & live telemetry (supports comparison)
     4. Synthesis LLM Call: Natural language explanation with zero number hallucinations
     """
     try:
@@ -148,6 +148,9 @@ def ask(request: AskRequest) -> AskResponse:
         planner_result = plan_query(request.question)
         question_type = planner_result.questionType
         location_name = planner_result.location
+        comparison_locations = getattr(planner_result, "comparison_locations", [])
+        target_date = getattr(planner_result, "target_date", "today")
+        forecast_day = 1 if target_date == "tomorrow" else (2 if target_date == "future" else 0)
 
         # Handle unsupported queries
         if question_type == "unsupported":
@@ -177,11 +180,12 @@ def ask(request: AskRequest) -> AskResponse:
                 sources=[],
             )
 
-        # Step 2 & 3: Deterministic Data & Rules Engine (Teammate B Interface)
+        # Step 2 & 3: Deterministic Data & Rules Engine (Primary Location)
         engine_result = evaluate_safety(
             location_name=location_name,
             question_type=question_type,
             broken_sources=request.simulate_broken_sources,
+            forecast_day=forecast_day,
         )
         verdict = engine_result["verdict"]
         risk_score = engine_result["riskScore"]
@@ -189,6 +193,27 @@ def ask(request: AskRequest) -> AskResponse:
         raw_data = engine_result["data"]
         raw_sources = engine_result["sources"]
         loc_coords = engine_result["location"]
+
+        # If comparison locations are requested, evaluate secondary candidates
+        comparison_data = []
+        if comparison_locations:
+            for comp_loc in comparison_locations:
+                comp_res = evaluate_safety(
+                    location_name=comp_loc,
+                    question_type=question_type,
+                    broken_sources=request.simulate_broken_sources,
+                    forecast_day=forecast_day,
+                )
+                comparison_data.append({
+                    "location_name": comp_res["location"]["name"],
+                    "verdict": comp_res["verdict"],
+                    "risk_score": comp_res["riskScore"],
+                    "reasons": comp_res["reasons"],
+                    "data": comp_res["data"],
+                })
+                for s in comp_res.get("sources", []):
+                    if s not in raw_sources:
+                        raw_sources.append(s)
 
         # Step 4: Synthesis Step (LLM Call #2)
         explanation = synthesize_explanation(
@@ -198,6 +223,8 @@ def ask(request: AskRequest) -> AskResponse:
             reasons=reasons,
             data=raw_data,
             risk_score=risk_score,
+            comparison_data=comparison_data,
+            target_date=target_date,
         )
 
         # Step 5: Construct and return Contract JSON

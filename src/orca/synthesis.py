@@ -22,22 +22,27 @@ Your task is to take the deterministic safety evaluation (verdict, risk reasons,
 4. Lead with Question Context:
    - If questionType is 'sea_conditions': Lead with wave height and wind conditions, then mention protected area distance if relevant.
    - If questionType is 'protected_area': Lead with the distance to the Marine Protected Area and boundary restrictions, then mention wind and wave conditions.
-5. Tone: Calm, authoritative, and safety-focused.
+   - If questionType is 'comparison': Compare the conditions of both locations side-by-side, explicitly identify which location is safer based on the data, and state why using the recorded numbers.
+5. Temporal Context: If target_date is 'tomorrow', explicitly reflect that the advisory applies to tomorrow's forecast.
+6. Tone: Calm, authoritative, and safety-focused.
 """
 
 def synthesize_explanation(
     location_name: str,
-    question_type: Literal["sea_conditions", "protected_area", "unsupported"],
+    question_type: str,
     verdict: Literal["SAFE", "CAUTION", "UNSAFE"],
     reasons: List[str],
     data: Dict[str, Optional[float]],
     risk_score: Optional[int] = None,
+    comparison_data: Optional[List[Dict[str, Any]]] = None,
+    target_date: str = "today",
     client: Optional[genai.Client] = None,
     model_id: Optional[str] = None,
 ) -> str:
     """
     Synthesizes a 2-3 sentence natural-language explanation from deterministic
     rules engine outputs and weather/ocean metrics, guaranteeing zero number hallucinations.
+    Supports single-location and multi-location comparative reasoning.
     """
     load_dotenv(override=False)
 
@@ -63,7 +68,44 @@ def synthesize_explanation(
     reasons_formatted = "\n".join(f"  * {r}" for r in reasons) if reasons else "  * None provided"
     metrics_formatted = "\n".join(metrics_lines) if metrics_lines else "  * No live metrics available"
 
-    user_prompt = f"""Write a 2-3 sentence safety explanation based strictly on these details:
+    if comparison_data and len(comparison_data) > 0:
+        comp_blocks = []
+        for c in comparison_data:
+            c_loc = c.get("location_name", "Alternative Location")
+            c_verd = c.get("verdict", "UNKNOWN")
+            c_score = c.get("risk_score", "N/A")
+            c_data = c.get("data", {})
+            c_reasons = ", ".join(c.get("reasons", [])) or "None"
+            comp_blocks.append(
+                f"- Alternative Location: {c_loc}\n"
+                f"  * Verdict: {c_verd}\n"
+                f"  * Risk Score: {c_score}\n"
+                f"  * Wave Height: {c_data.get('waveHeightM')} m\n"
+                f"  * Wind Speed: {c_data.get('windSpeedKmh')} km/h\n"
+                f"  * MPA Distance: {c_data.get('mpaDistanceKm')} km\n"
+                f"  * Key Reasons: {c_reasons}"
+            )
+        comp_formatted = "\n\n".join(comp_blocks)
+
+        user_prompt = f"""Write a 2-3 sentence comparative safety explanation contrasting {location_name} with the alternative option(s) for {target_date}:
+Primary Location: {location_name}
+- Safety Verdict: {verdict}
+- Risk Score: {risk_score if risk_score is not None else 'N/A'}
+- Deterministic Reasons:
+{reasons_formatted}
+- Actual Recorded Data:
+{metrics_formatted}
+
+Alternative Comparison Options:
+{comp_formatted}
+
+Instructions:
+1. Contrast the wave heights and wind speeds of both locations for {target_date}.
+2. Conclude clearly on which destination is safer based on the data.
+3. Keep to exactly 2-3 sentences. Every number you state must strictly come from the data above with zero hallucination."""
+    else:
+        time_phrase = f"for {target_date}" if target_date != "today" else "for today"
+        user_prompt = f"""Write a 2-3 sentence safety explanation {time_phrase} based strictly on these details:
 - Location: {location_name}
 - Question Category: {question_type}
 - Safety Verdict: {verdict}

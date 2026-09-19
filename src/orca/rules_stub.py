@@ -1,8 +1,10 @@
+import os
 from typing import Dict, Any, Optional
 from src.orca.services.geocoding import geocode_location
 from src.orca.services.weather import fetch_live_weather
 from src.orca.services.marine import fetch_live_marine
 from src.orca.services.mpa import calculate_mpa_distance
+from src.orca.services.teammate_client import query_teammate_backend
 
 # Fallback baseline values if external APIs fail or are offline
 BASELINE_CITIES = {
@@ -33,25 +35,41 @@ def evaluate_safety(
     location_name: str,
     question_type: str,
     broken_sources: Optional[list] = None,
+    forecast_day: int = 0,
 ) -> Dict[str, Any]:
     """
     Evaluates maritime safety by integrating live Open-Meteo weather and wave APIs,
     geospatial MPA calculations using Shapely and GeoJSON, and deterministic rule thresholds.
+    Optionally queries Teammate B's deployed Render API when TEAMMATE_BACKEND_URL is set.
+    forecast_day: 0 for today/current, 1 for tomorrow, 2 for day after tomorrow.
     """
     broken = set(s.lower() for s in (broken_sources or []))
     key = location_name.strip().lower()
     baseline = BASELINE_CITIES.get(key, {})
 
-    # 1. Geocode location
-    lat, lon, display_name = geocode_location(location_name)
+    # Check if remote cloud backend is enabled
+    remote_data = None
+    if os.environ.get("TEAMMATE_BACKEND_URL"):
+        remote_data = query_teammate_backend(location_name)
+
+    # 1. Geocode location (use remote coordinates if available)
+    if remote_data and remote_data.get("location", {}).get("lat"):
+        lat = remote_data["location"]["lat"]
+        lon = remote_data["location"]["lon"]
+        display_name = remote_data["location"]["name"] or location_name
+    else:
+        lat, lon, display_name = geocode_location(location_name)
 
     sources = []
 
     # 2. Live Weather Channel (Open-Meteo Forecast)
     if "wind" in broken or "weather" in broken:
         wind = None
+    elif remote_data and remote_data.get("wind") is not None and forecast_day == 0:
+        wind = remote_data["wind"]
+        sources.append(SOURCE_WIND)
     else:
-        wind = fetch_live_weather(lat, lon)
+        wind = fetch_live_weather(lat, lon, forecast_day=forecast_day)
         if wind is None:
             # Graceful fallback to baseline if network blips
             wind = baseline.get("wind", 15.0)
@@ -60,8 +78,11 @@ def evaluate_safety(
     # 3. Live Marine Channel (Open-Meteo Marine)
     if "wave" in broken or "ocean" in broken or "marine" in broken:
         wave = None
+    elif remote_data and remote_data.get("wave") is not None and forecast_day == 0:
+        wave = remote_data["wave"]
+        sources.append(SOURCE_WAVE)
     else:
-        wave = fetch_live_marine(lat, lon)
+        wave = fetch_live_marine(lat, lon, forecast_day=forecast_day)
         if wave is None:
             # Graceful fallback to baseline if network blips
             wave = baseline.get("wave", 1.0)
