@@ -12,6 +12,7 @@ from src.orca.planner import plan_query
 from src.orca.synthesis import synthesize_explanation
 from src.orca.rules_stub import evaluate_safety
 from src.orca.fixtures import get_demo_fixture
+from src.orca.agent import run_orca_agent
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("orca")
@@ -136,7 +137,7 @@ def ask(request: AskRequest) -> AskResponse:
         # Check DEMO_MODE flag (either from request or environment)
         is_demo = (
             request.demo_mode is True or
-            (request.demo_mode is None and os.environ.get("DEMO_MODE", "false").lower() in ("true", "1", "yes"))
+            os.environ.get("DEMO_MODE", "false").lower() in ("true", "1", "yes")
         )
 
         if is_demo:
@@ -144,7 +145,25 @@ def ask(request: AskRequest) -> AskResponse:
             if fixture:
                 return AskResponse(**fixture)
 
-        # Step 1: Planner Step (LLM Call #1)
+        # Primary Path: Autonomous Free-Flowing Tool-Calling Agent
+        if not request.simulate_broken_sources:
+            try:
+                agent_res = run_orca_agent(request.question)
+                return AskResponse(
+                    status=agent_res["status"],
+                    questionType=agent_res.get("questionType"),
+                    location=LocationData(**agent_res["location"]) if agent_res.get("location") else None,
+                    verdict=agent_res.get("verdict"),
+                    riskScore=agent_res.get("riskScore"),
+                    reasons=agent_res.get("reasons", []),
+                    data=MarineMetrics(**agent_res["data"]) if agent_res.get("data") else None,
+                    explanation=agent_res["explanation"],
+                    sources=[SourceItem(name=s["name"], url=s["url"]) for s in agent_res.get("sources", [])],
+                )
+            except Exception as e:
+                logger.warning(f"Agent dynamic call encountered exception, using fallback pipeline: {e}")
+
+        # Fallback / Simulation Path: Two-stage Planner + Rules + Synthesis Pipeline
         planner_result = plan_query(request.question)
         question_type = planner_result.questionType
         location_name = planner_result.location
