@@ -1,0 +1,708 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-950 text-slate-100">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ORCA | Marine Safety AI Assistant</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            ocean: {
+              800: '#0c213b',
+              900: '#071629',
+              950: '#040d1a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    .leaflet-container {
+      background: #091322 !important;
+      font-family: inherit;
+    }
+    .custom-leaflet-popup .leaflet-popup-content-wrapper {
+      background: #0f172a;
+      color: #f1f5f9;
+      border: 1px solid #334155;
+      border-radius: 8px;
+    }
+    .custom-leaflet-popup .leaflet-popup-tip {
+      background: #0f172a;
+    }
+    @keyframes pulse-ring {
+      0% { transform: scale(0.5); opacity: 0.8; }
+      100% { transform: scale(2.5); opacity: 0; }
+    }
+    .radar-pulse {
+      position: relative;
+    }
+    .radar-pulse::after {
+      content: '';
+      position: absolute;
+      width: 100%;
+      height: 100%;
+      top: 0;
+      left: 0;
+      border-radius: 50%;
+      background: #06b6d4;
+      animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-ocean-950">
+
+  <!-- Navigation Bar -->
+  <header class="border-b border-slate-800/80 bg-ocean-900/90 backdrop-blur sticky top-0 z-30 px-6 py-3.5">
+    <div class="max-w-7xl mx-auto flex items-center justify-between">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center shadow-lg shadow-cyan-500/20 text-white font-bold text-xl">
+          ⚓
+        </div>
+        <div>
+          <div class="flex items-center space-x-2">
+            <h1 class="font-bold text-lg tracking-tight text-white">ORCA Marine</h1>
+            <span class="text-xs px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-400 border border-cyan-800/60 font-mono">SIH 26176</span>
+          </div>
+          <p class="text-xs text-slate-400">AI Maritime Safety & Decision Support Assistant</p>
+        </div>
+      </div>
+      <div class="flex items-center space-x-4">
+        <div class="hidden sm:flex items-center space-x-2 text-xs font-mono px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>Gemini 2.5 + Open-Meteo Live</span>
+        </div>
+        <a href="/docs" target="_blank" class="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
+          Swagger API
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Workspace -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: Input, Controls & Advisory -->
+    <div class="lg:col-span-7 flex flex-col space-y-6">
+
+      <!-- Query Card -->
+      <div class="p-5 rounded-2xl bg-ocean-900 border border-slate-800 shadow-xl">
+        <form id="ask-form" class="space-y-4">
+          <div>
+            <label for="question-input" class="block text-xs font-semibold uppercase tracking-wider text-cyan-400 mb-1.5">
+              Ask a Coastal Marine Safety Question
+            </label>
+            <div class="relative">
+              <input
+                id="question-input"
+                type="text"
+                value="Is it safe to take a small boat out near Mangaluru today?"
+                class="w-full pl-4 pr-12 py-3 rounded-xl bg-slate-950/80 border border-slate-700 focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500 text-white placeholder-slate-500 text-sm outline-none transition"
+                placeholder="e.g., Can I take a fishing boat out near Goa without entering a protected sanctuary?"
+              />
+              <button
+                type="submit"
+                id="submit-btn"
+                class="absolute right-1.5 top-1.5 bottom-1.5 px-4 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-medium text-xs flex items-center space-x-1.5 shadow-md shadow-cyan-600/30 transition disabled:opacity-50"
+              >
+                <span>Analyze</span>
+                <span id="btn-arrow">→</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Presets -->
+          <div>
+            <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
+              <span>Quick Test Presets:</span>
+            </div>
+            <div class="flex flex-wrap gap-1.5">
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="Is it safe to take a small boat out near Mangaluru today?">
+                🟢 Mangaluru (Safe Boating)
+              </button>
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="Can I fish near Goa without entering a protected zone?">
+                🟡 Goa (MPA Caution)
+              </button>
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="Is it safe to go out in Mumbai during the storm?">
+                🔴 Mumbai (Rough Seas)
+              </button>
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="What are the wave conditions near Kochi today?">
+                🌊 Kochi (Live API)
+              </button>
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="Are the waves too rough for sailing right now?">
+                ⚠️ Missing Location
+              </button>
+              <button type="button" class="preset-btn px-2.5 py-1 rounded-md bg-slate-950 hover:bg-cyan-950 border border-slate-800 hover:border-cyan-700 text-xs text-slate-300 transition" data-q="What is the capital of France?">
+                🚫 Unsupported Query
+              </button>
+            </div>
+          </div>
+
+          <!-- Advanced Simulation Toggles -->
+          <div class="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+            <label class="flex items-center space-x-2 cursor-pointer select-none">
+              <input type="checkbox" id="demo-mode-toggle" class="rounded bg-slate-900 border-slate-700 text-cyan-500 focus:ring-0" />
+              <span class="text-slate-300 font-medium">⚡ Demo Mode (Offline Rehearsal)</span>
+            </label>
+
+            <div class="flex items-center space-x-3">
+              <span class="text-slate-500">Fault Injection:</span>
+              <label class="flex items-center space-x-1 cursor-pointer select-none">
+                <input type="checkbox" id="break-wave" class="rounded bg-slate-900 border-slate-700 text-rose-500 focus:ring-0" />
+                <span>Drop Wave</span>
+              </label>
+              <label class="flex items-center space-x-1 cursor-pointer select-none">
+                <input type="checkbox" id="break-mpa" class="rounded bg-slate-900 border-slate-700 text-rose-500 focus:ring-0" />
+                <span>Drop MPA</span>
+              </label>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Loading State (CONTRACT.md Section 8 Staged Animation) -->
+      <div id="loading-card" class="hidden p-5 rounded-2xl bg-ocean-900/90 border border-cyan-800/50 shadow-xl space-y-4">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-mono uppercase tracking-wider text-cyan-400">Processing Maritime Pipeline</span>
+          <span id="loading-timer" class="text-xs font-mono text-slate-400">0.0s</span>
+        </div>
+
+        <div class="space-y-2.5">
+          <!-- Step 1 -->
+          <div id="stage-1" class="flex items-center space-x-3 text-xs text-slate-300 transition">
+            <span class="w-4 h-4 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin inline-block"></span>
+            <span>Step 1: Identifying coastal sector & extracting location (Planner LLM)...</span>
+          </div>
+          <!-- Step 2 -->
+          <div id="stage-2" class="flex items-center space-x-3 text-xs text-slate-500 transition">
+            <span class="w-4 h-4 rounded-full border border-slate-700 inline-block"></span>
+            <span>Step 2: Retrieving live weather, wave, & sanctuary boundaries (Open-Meteo & GeoJSON)...</span>
+          </div>
+          <!-- Step 3 -->
+          <div id="stage-3" class="flex items-center space-x-3 text-xs text-slate-500 transition">
+            <span class="w-4 h-4 rounded-full border border-slate-700 inline-block"></span>
+            <span>Step 3: Synthesizing zero-hallucination maritime advisory (Synthesis LLM)...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Response Advisory Display -->
+      <div id="response-card" class="hidden flex flex-col space-y-5 p-5 rounded-2xl bg-ocean-900 border border-slate-800 shadow-xl">
+        
+        <!-- Header Banner & Verdict -->
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-800">
+          <div>
+            <div class="flex items-center space-x-2">
+              <span id="res-location" class="font-bold text-lg text-white">Mangaluru</span>
+              <span id="res-badge" class="px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-950 text-emerald-400 border border-emerald-800">
+                SAFE
+              </span>
+            </div>
+            <p id="res-qtype" class="text-xs text-slate-400 mt-0.5">Category: sea_conditions</p>
+          </div>
+
+          <!-- Risk Score Bar -->
+          <div id="risk-score-box" class="flex items-center space-x-3 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800">
+            <div class="text-right">
+              <div class="text-[10px] uppercase font-mono text-slate-400">Risk Score</div>
+              <div id="risk-score-val" class="text-lg font-mono font-bold text-emerald-400">18<span class="text-xs font-normal text-slate-500">/100</span></div>
+            </div>
+            <div class="w-20 bg-slate-800 h-2 rounded-full overflow-hidden">
+              <div id="risk-meter-fill" class="h-full bg-emerald-400 rounded-full transition-all duration-500" style="width: 18%"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Synthesized Explanation / Speech -->
+        <div class="rounded-xl bg-slate-950/70 p-4 border border-slate-800/80 space-y-3">
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-mono uppercase tracking-wider text-cyan-400">Maritime Advisory</span>
+            <button
+              id="speech-btn"
+              type="button"
+              class="flex items-center space-x-1.5 px-3 py-1 rounded-lg bg-cyan-950/60 hover:bg-cyan-900 border border-cyan-800/60 text-xs text-cyan-300 transition"
+            >
+              <span id="speech-icon">🔊</span>
+              <span id="speech-label">Read Advisory</span>
+            </button>
+          </div>
+          <p id="res-explanation" class="text-sm text-slate-200 leading-relaxed">
+            Explanation text appears here.
+          </p>
+        </div>
+
+        <!-- Telemetry Data Cards (3 Grid) -->
+        <div id="metrics-grid" class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <!-- Wind -->
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-blue-950 text-blue-400 flex items-center justify-center text-base">
+              💨
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Wind Speed</div>
+              <div id="metric-wind" class="font-mono font-semibold text-slate-100 text-sm">14.2 km/h</div>
+            </div>
+          </div>
+
+          <!-- Waves -->
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-cyan-950 text-cyan-400 flex items-center justify-center text-base">
+              🌊
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Wave Height</div>
+              <div id="metric-wave" class="font-mono font-semibold text-slate-100 text-sm">0.8 m</div>
+            </div>
+          </div>
+
+          <!-- MPA Distance -->
+          <div class="p-3 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center space-x-3">
+            <div class="w-9 h-9 rounded-lg bg-emerald-950 text-emerald-400 flex items-center justify-center text-base">
+              🛡️
+            </div>
+            <div>
+              <div class="text-[11px] text-slate-400">Nearest MPA</div>
+              <div id="metric-mpa" class="font-mono font-semibold text-slate-100 text-sm">18.5 km</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Evaluated Reasons -->
+        <div id="reasons-box">
+          <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Evaluated Rules & Reasons:</div>
+          <ul id="reasons-list" class="space-y-1.5 text-xs text-slate-300">
+            <!-- Populated via JS -->
+          </ul>
+        </div>
+
+        <!-- Sources Cited (KHA-21 Active Citations) -->
+        <div class="pt-3 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <span class="text-slate-400">Verified Data Sources:</span>
+          <div id="sources-container" class="flex flex-wrap gap-1.5">
+            <!-- Source Badges -->
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- Right Column: Interactive Maritime Map -->
+    <div class="lg:col-span-5 flex flex-col space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="text-xs font-bold uppercase tracking-wider text-slate-400">Geospatial Tactical Map</h2>
+        <span class="text-[11px] font-mono text-cyan-400 flex items-center space-x-1">
+          <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+          <span>OpenStreetMap & Sanctuary GeoJSON</span>
+        </span>
+      </div>
+
+      <div class="relative flex-1 min-h-[420px] rounded-2xl overflow-hidden border border-slate-800 bg-slate-950 shadow-2xl">
+        <div id="map" class="w-full h-full"></div>
+
+        <!-- Floating Map Legend -->
+        <div class="absolute bottom-3 left-3 z-[1000] p-2.5 rounded-xl bg-slate-950/90 backdrop-blur border border-slate-800 text-[11px] space-y-1.5 shadow-lg">
+          <div class="font-semibold text-slate-300 mb-1">Legend</div>
+          <div class="flex items-center space-x-2">
+            <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 border border-cyan-300"></span>
+            <span class="text-slate-400">Query Location</span>
+          </div>
+          <div class="flex items-center space-x-2">
+            <span class="w-3 h-2 rounded bg-rose-500/30 border border-rose-500"></span>
+            <span class="text-slate-400">Marine Protected Area</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <script>
+    // --- Application State ---
+    let map = null;
+    let locationMarker = null;
+    let mpaLayer = null;
+    let currentAdvisory = "";
+    let synth = window.speechSynthesis;
+    let speakingUtterance = null;
+    let loadingTimerInterval = null;
+
+    // Initialize Leaflet Map
+    function initMap() {
+      // Default center around West Coast of India
+      map = L.map('map', {
+        center: [14.5, 74.0],
+        zoom: 6,
+        zoomControl: true,
+      });
+
+      // CartoDB Dark Matter tiles
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+      }).addTo(map);
+
+      // Load Marine Protected Areas GeoJSON
+      loadMpaGeojson();
+    }
+
+    async function loadMpaGeojson() {
+      try {
+        const resp = await fetch('/api/mpa-geojson');
+        if (resp.ok) {
+          const geojson = await resp.json();
+          mpaLayer = L.geoJSON(geojson, {
+            style: {
+              color: '#f43f5e',
+              weight: 2,
+              fillColor: '#fb7185',
+              fillOpacity: 0.25,
+            },
+            onEachFeature: function (feature, layer) {
+              const name = feature.properties?.name || feature.properties?.NAME || "Marine Sanctuary";
+              layer.bindPopup(`<div class="text-xs p-1 font-sans"><strong>${name}</strong><br><span class="text-slate-400">Protected Marine Zone</span></div>`, {
+                className: 'custom-leaflet-popup'
+              });
+            }
+          }).addTo(map);
+        }
+      } catch (e) {
+        console.warn("Could not load MPA GeoJSON on map:", e);
+      }
+    }
+
+    // Update map marker when location changes
+    function updateMapLocation(name, lat, lon) {
+      if (!map) return;
+
+      if (locationMarker) {
+        map.removeLayer(locationMarker);
+      }
+
+      // Create glowing marker
+      const customIcon = L.divIcon({
+        className: 'custom-pin',
+        html: `<div class="radar-pulse w-5 h-5 rounded-full bg-cyan-500 border-2 border-white shadow-lg"></div>`,
+        iconSize: [20, 20],
+        iconAnchor: [10, 10]
+      });
+
+      locationMarker = L.marker([lat, lon], { icon: customIcon }).addTo(map);
+      locationMarker.bindPopup(`<div class="text-xs p-1"><strong>${name}</strong><br><span class="text-slate-400">Query Point: ${lat.toFixed(2)}, ${lon.toFixed(2)}</span></div>`, {
+        className: 'custom-leaflet-popup'
+      }).openPopup();
+
+      map.flyTo([lat, lon], 9, {
+        duration: 1.2
+      });
+    }
+
+    // Form Submission & API Query
+    const askForm = document.getElementById('ask-form');
+    const questionInput = document.getElementById('question-input');
+    const submitBtn = document.getElementById('submit-btn');
+    const demoModeToggle = document.getElementById('demo-mode-toggle');
+    const breakWaveBox = document.getElementById('break-wave');
+    const breakMpaBox = document.getElementById('break-mpa');
+
+    const loadingCard = document.getElementById('loading-card');
+    const loadingTimer = document.getElementById('loading-timer');
+    const stage1 = document.getElementById('stage-1');
+    const stage2 = document.getElementById('stage-2');
+    const stage3 = document.getElementById('stage-3');
+
+    const responseCard = document.getElementById('response-card');
+    const resLocation = document.getElementById('res-location');
+    const resBadge = document.getElementById('res-badge');
+    const resQtype = document.getElementById('res-qtype');
+    const riskScoreBox = document.getElementById('risk-score-box');
+    const riskScoreVal = document.getElementById('risk-score-val');
+    const riskMeterFill = document.getElementById('risk-meter-fill');
+    const resExplanation = document.getElementById('res-explanation');
+    const metricsGrid = document.getElementById('metrics-grid');
+    const metricWind = document.getElementById('metric-wind');
+    const metricWave = document.getElementById('metric-wave');
+    const metricMpa = document.getElementById('metric-mpa');
+    const reasonsBox = document.getElementById('reasons-box');
+    const reasonsList = document.getElementById('reasons-list');
+    const sourcesContainer = document.getElementById('sources-container');
+
+    // Preset buttons
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        questionInput.value = btn.getAttribute('data-q');
+        askForm.dispatchEvent(new Event('submit'));
+      });
+    });
+
+    askForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const question = questionInput.value.trim();
+      if (!question) return;
+
+      // Prepare simulation params
+      const brokenSources = [];
+      if (breakWaveBox.checked) brokenSources.push("wave");
+      if (breakMpaBox.checked) brokenSources.push("mpa");
+
+      const payload = {
+        question: question,
+        demo_mode: demoModeToggle.checked,
+        simulate_broken_sources: brokenSources.length > 0 ? brokenSources : null
+      };
+
+      // Reset & show loading animation
+      submitBtn.disabled = true;
+      responseCard.classList.add('hidden');
+      loadingCard.classList.remove('hidden');
+
+      // Stop any active speech
+      if (synth && synth.speaking) {
+        synth.cancel();
+        updateSpeechButton(false);
+      }
+
+      // Start elapsed timer and staged indicators (CONTRACT.md Section 8)
+      const startTime = performance.now();
+      resetLoadingStages();
+
+      loadingTimerInterval = setInterval(() => {
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+        loadingTimer.innerText = `${elapsed}s`;
+
+        if (elapsed >= 0.8 && elapsed < 1.6) {
+          markStageActive(stage2, "Step 2: Retrieving live weather, wave, & sanctuary boundaries (Open-Meteo & GeoJSON)...");
+        } else if (elapsed >= 1.6) {
+          markStageActive(stage3, "Step 3: Synthesizing zero-hallucination maritime advisory (Synthesis LLM)...");
+        }
+      }, 100);
+
+      try {
+        const response = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await response.json();
+        renderResponse(data);
+      } catch (err) {
+        console.error("API error:", err);
+        renderError("Failed to reach ORCA backend server. Please verify backend is running on port 8000.");
+      } finally {
+        clearInterval(loadingTimerInterval);
+        loadingCard.classList.add('hidden');
+        submitBtn.disabled = false;
+      }
+    });
+
+    function resetLoadingStages() {
+      loadingTimer.innerText = "0.0s";
+      stage1.className = "flex items-center space-x-3 text-xs text-cyan-300 font-medium transition";
+      stage1.innerHTML = `<span class="w-4 h-4 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin inline-block"></span><span>Step 1: Identifying coastal sector & extracting location (Planner LLM)...</span>`;
+
+      stage2.className = "flex items-center space-x-3 text-xs text-slate-500 transition";
+      stage2.innerHTML = `<span class="w-4 h-4 rounded-full border border-slate-700 inline-block"></span><span>Step 2: Retrieving live weather, wave, & sanctuary boundaries (Open-Meteo & GeoJSON)...</span>`;
+
+      stage3.className = "flex items-center space-x-3 text-xs text-slate-500 transition";
+      stage3.innerHTML = `<span class="w-4 h-4 rounded-full border border-slate-700 inline-block"></span><span>Step 3: Synthesizing zero-hallucination maritime advisory (Synthesis LLM)...</span>`;
+    }
+
+    function markStageActive(elem, text) {
+      elem.className = "flex items-center space-x-3 text-xs text-cyan-300 font-medium transition";
+      elem.innerHTML = `<span class="w-4 h-4 rounded-full border-2 border-cyan-500 border-t-transparent animate-spin inline-block"></span><span>${text}</span>`;
+    }
+
+    function renderResponse(data) {
+      responseCard.classList.remove('hidden');
+      currentAdvisory = data.explanation || "";
+
+      // 1. Status Handling
+      if (data.status === "missing_location") {
+        resLocation.innerText = "Location Needed";
+        resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-950 text-amber-400 border border-amber-800";
+        resBadge.innerText = "ATTENTION";
+        resQtype.innerText = `Category: ${data.questionType || 'unknown'}`;
+        riskScoreBox.classList.add('hidden');
+        metricsGrid.classList.add('hidden');
+        reasonsBox.classList.add('hidden');
+        resExplanation.innerText = data.explanation;
+        sourcesContainer.innerHTML = `<span class="text-slate-500 italic">No external query required</span>`;
+        return;
+      }
+
+      if (data.status === "unsupported") {
+        resLocation.innerText = "Out of Domain";
+        resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-slate-800 text-slate-300 border border-slate-700";
+        resBadge.innerText = "REFUSED";
+        resQtype.innerText = "Category: unsupported";
+        riskScoreBox.classList.add('hidden');
+        metricsGrid.classList.add('hidden');
+        reasonsBox.classList.add('hidden');
+        resExplanation.innerText = data.explanation;
+        sourcesContainer.innerHTML = `<span class="text-slate-500 italic">No external query required</span>`;
+        return;
+      }
+
+      if (data.status === "error") {
+        renderError(data.explanation);
+        return;
+      }
+
+      // Normal OK response
+      resLocation.innerText = data.location?.name || "Coastal Waters";
+      resQtype.innerText = `Category: ${data.questionType}`;
+      riskScoreBox.classList.remove('hidden');
+      metricsGrid.classList.remove('hidden');
+      reasonsBox.classList.remove('hidden');
+
+      // Verdict Styling
+      const verdict = data.verdict || "SAFE";
+      if (verdict === "SAFE") {
+        resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-950 text-emerald-400 border border-emerald-800";
+        resBadge.innerText = "SAFE";
+        riskScoreVal.className = "text-lg font-mono font-bold text-emerald-400";
+        riskMeterFill.className = "h-full bg-emerald-400 rounded-full transition-all duration-500";
+      } else if (verdict === "CAUTION") {
+        resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-950 text-amber-400 border border-amber-800";
+        resBadge.innerText = "CAUTION";
+        riskScoreVal.className = "text-lg font-mono font-bold text-amber-400";
+        riskMeterFill.className = "h-full bg-amber-400 rounded-full transition-all duration-500";
+      } else {
+        resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-950 text-rose-400 border border-rose-800";
+        resBadge.innerText = "UNSAFE";
+        riskScoreVal.className = "text-lg font-mono font-bold text-rose-400";
+        riskMeterFill.className = "h-full bg-rose-400 rounded-full transition-all duration-500";
+      }
+
+      // Risk score
+      const score = data.riskScore ?? 0;
+      riskScoreVal.innerHTML = `${score}<span class="text-xs font-normal text-slate-500">/100</span>`;
+      riskMeterFill.style.width = `${Math.min(100, Math.max(5, score))}%`;
+
+      // Advisory explanation
+      resExplanation.innerText = data.explanation;
+
+      // Telemetry Cards
+      const metrics = data.data || {};
+      metricWind.innerText = metrics.windSpeedKmh != null ? `${metrics.windSpeedKmh} km/h` : "N/A (Broken)";
+      metricWave.innerText = metrics.waveHeightM != null ? `${metrics.waveHeightM} m` : "N/A (Broken)";
+      metricMpa.innerText = metrics.mpaDistanceKm != null ? `${metrics.mpaDistanceKm} km` : "N/A (Broken)";
+
+      // Reasons list
+      reasonsList.innerHTML = "";
+      if (data.reasons && data.reasons.length > 0) {
+        data.reasons.forEach(r => {
+          const li = document.createElement('li');
+          li.className = "flex items-start space-x-2";
+          li.innerHTML = `<span class="text-cyan-400 mt-0.5">•</span><span>${r}</span>`;
+          reasonsList.appendChild(li);
+        });
+      } else {
+        reasonsList.innerHTML = `<li class="text-slate-500 italic">No specific risk warnings triggered.</li>`;
+      }
+
+      // Sources
+      sourcesContainer.innerHTML = "";
+      if (data.sources && data.sources.length > 0) {
+        data.sources.forEach(s => {
+          const badge = document.createElement('a');
+          badge.href = s.url;
+          badge.target = "_blank";
+          badge.className = "inline-flex items-center space-x-1 px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition";
+          badge.innerHTML = `<span>${s.name}</span><span class="text-slate-500 text-[10px]">↗</span>`;
+          sourcesContainer.appendChild(badge);
+        });
+      }
+
+      // Map pin update
+      if (data.location && data.location.lat != null && data.location.lon != null) {
+        updateMapLocation(data.location.name, data.location.lat, data.location.lon);
+      }
+    }
+
+    function renderError(msg) {
+      responseCard.classList.remove('hidden');
+      resLocation.innerText = "System Error";
+      resBadge.className = "px-2.5 py-0.5 rounded-full text-xs font-bold uppercase tracking-wider bg-rose-950 text-rose-400 border border-rose-800";
+      resBadge.innerText = "ERROR";
+      resQtype.innerText = "";
+      riskScoreBox.classList.add('hidden');
+      metricsGrid.classList.add('hidden');
+      reasonsBox.classList.add('hidden');
+      resExplanation.innerText = msg;
+      sourcesContainer.innerHTML = "";
+    }
+
+    // --- Web Speech API (Text-to-Speech) ---
+    const speechBtn = document.getElementById('speech-btn');
+    const speechIcon = document.getElementById('speech-icon');
+    const speechLabel = document.getElementById('speech-label');
+
+    function updateSpeechButton(isPlaying) {
+      if (isPlaying) {
+        speechIcon.innerText = "⏹️";
+        speechLabel.innerText = "Stop Audio";
+        speechBtn.classList.replace('text-cyan-300', 'text-rose-400');
+        speechBtn.classList.replace('border-cyan-800/60', 'border-rose-800/60');
+      } else {
+        speechIcon.innerText = "🔊";
+        speechLabel.innerText = "Read Advisory";
+        speechBtn.classList.replace('text-rose-400', 'text-cyan-300');
+        speechBtn.classList.replace('border-rose-800/60', 'border-cyan-800/60');
+      }
+    }
+
+    speechBtn.addEventListener('click', () => {
+      if (!synth) {
+        alert("Speech synthesis is not supported on this browser.");
+        return;
+      }
+
+      if (synth.speaking) {
+        synth.cancel();
+        updateSpeechButton(false);
+        return;
+      }
+
+      if (!currentAdvisory) return;
+
+      speakingUtterance = new SpeechSynthesisUtterance(currentAdvisory);
+      speakingUtterance.rate = 0.95;
+      speakingUtterance.pitch = 1.0;
+
+      // Select a clear English voice if available
+      const voices = synth.getVoices();
+      const preferred = voices.find(v => (v.name.includes("Google") || v.name.includes("Natural") || v.name.includes("Samantha") || v.name.includes("Jenny")) && v.lang.startsWith("en"));
+      if (preferred) {
+        speakingUtterance.voice = preferred;
+      }
+
+      speakingUtterance.onend = () => updateSpeechButton(false);
+      speakingUtterance.onerror = () => updateSpeechButton(false);
+
+      updateSpeechButton(true);
+      synth.speak(speakingUtterance);
+    });
+
+    // Boot map on window load
+    window.addEventListener('DOMContentLoaded', () => {
+      initMap();
+    });
+  </script>
+</body>
+</html>

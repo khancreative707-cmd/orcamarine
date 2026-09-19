@@ -1,0 +1,11 @@
+# ORCA Marine Safety Assistant — Python Production Dependencies
+# Compatible with Python 3.10, 3.11, 3.12, 3.13, 3.14
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.8.0
+google-genai>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+shapely>=2.0.0
+numpy>=2.0.0

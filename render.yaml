@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: orcamarine-ai-backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.orca.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DEMO_MODE
+        value: "false"
+      - key: TEAMMATE_BACKEND_URL
+        value: "https://orcamarine-backend.onrender.com"
